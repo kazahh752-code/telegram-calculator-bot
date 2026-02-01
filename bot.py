@@ -1,242 +1,159 @@
 """
-Telegram-бот Калькулятор для Render.com (Web Service)
-Версия с встроенным веб-сервером
+Telegram-бот Калькулятор для Render (упрощённая стабильная версия)
 """
 
 import os
+import logging
 from threading import Thread
 from flask import Flask
-from telegram import Update, ReplyKeyboardMarkup
+from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# Получаем токен из переменной окружения
-TOKEN = os.environ.get('BOT_TOKEN', 'ВАШ_ТОКЕН_ЗДЕСЬ')
+# Настройка логирования
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
-# Получаем порт для веб-сервера (Render требует это)
+# Получаем токен и порт
+TOKEN = os.environ.get('BOT_TOKEN')
 PORT = int(os.environ.get('PORT', 10000))
 
-# Создаём Flask приложение (веб-сервер)
+if not TOKEN:
+    logger.error("❌ BOT_TOKEN не найден в переменных окружения!")
+    exit(1)
+
+# Flask приложение
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    """Главная страница - показывает что бот работает"""
     return """
     <html>
     <head><title>Telegram Bot</title></head>
     <body style="font-family: Arial; text-align: center; padding: 50px;">
-        <h1>🤖 Telegram Calculator Bot</h1>
-        <p>✅ Bot is running!</p>
-        <p>Бот работает нормально!</p>
-        <hr>
-        <p>Status: <span style="color: green;">ACTIVE</span></p>
+        <h1>🤖 Calculator Bot</h1>
+        <p style="color: green; font-size: 20px;">✅ Running!</p>
     </body>
     </html>
     """
 
 @app.route('/health')
 def health():
-    """Health check для Render"""
-    return {'status': 'ok', 'bot': 'running'}, 200
+    return {'status': 'ok'}, 200
 
 
-# ============== ФУНКЦИИ БОТА ==============
-
+# Функции бота
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Приветствие при /start"""
+    """Команда /start"""
     user_name = update.effective_user.first_name
-    
-    welcome_text = f"""
-👋 Привет, {user_name}!
+    text = f"""👋 Привет, {user_name}!
 
 Я бот-калькулятор! 🧮
 
-📌 Что я умею:
-• Сложение: 5 + 3
-• Вычитание: 10 - 4
-• Умножение: 6 * 7
-• Деление: 20 / 4
-
-📝 Как пользоваться:
-Просто напишите пример:
+Просто напиши пример:
 → 25 + 17
+→ 100 - 45
+→ 12 * 8
+→ 144 / 12
 
 Команды:
-/help - помощь
-/temp - конвертер температуры
-"""
+/help - помощь"""
     
-    await update.message.reply_text(welcome_text)
+    await update.message.reply_text(text)
+    logger.info(f"Пользователь {user_name} запустил бота")
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Справка"""
-    help_text = """
-📚 ИНСТРУКЦИЯ:
+    """Команда /help"""
+    text = """📚 Инструкция:
 
-🧮 Калькулятор:
-Напишите пример:
+Напишите математический пример:
 • 15 + 8
-• 100 - 35
+• 100 - 35  
 • 12 * 5
 • 50 / 2
 
-🌡️ Конвертер температуры:
-• 25C (→ Фаренгейт)
-• 77F (→ Цельсий)
-
 Команды:
 /start - начало
-/temp - температура
-"""
-    await update.message.reply_text(help_text)
+/help - помощь"""
+    
+    await update.message.reply_text(text)
 
 
 async def calculate(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Калькулятор"""
+    """Обработка сообщений"""
     try:
         text = update.message.text.strip()
         
         # Проверяем наличие операторов
-        if any(op in text for op in ['+', '-', '*', '/', 'х', '×', '÷']):
-            # Нормализуем символы
-            text = text.replace('х', '*').replace('×', '*')
-            text = text.replace('÷', '/').replace(',', '.')
+        if any(op in text for op in ['+', '-', '*', '/']):
+            # Нормализуем
+            text = text.replace('х', '*').replace('×', '*').replace('÷', '/')
+            text = text.replace(',', '.')
             
             # Безопасное вычисление
             allowed = set('0123456789+-*/(). ')
             if all(c in allowed for c in text):
                 result = eval(text)
-                await update.message.reply_text(
-                    f"✅ Результат:\n\n{text} = {result}"
-                )
+                await update.message.reply_text(f"✅ {text} = {result}")
+                logger.info(f"Вычислено: {text} = {result}")
             else:
-                await update.message.reply_text(
-                    "❌ Используйте только: + - * /"
-                )
-        
-        # Проверяем температуру
-        elif any(unit in text.upper() for unit in ['C', 'F', 'С']):
-            await handle_temperature(update, context)
-        
+                await update.message.reply_text("❌ Используйте только: + - * /")
         else:
             await update.message.reply_text(
-                "🤔 Напишите пример:\n"
-                "Например: 25 + 17\n"
-                "Или: 25C"
+                "🤔 Напишите пример:\nНапример: 25 + 17"
             )
     
     except ZeroDivisionError:
         await update.message.reply_text("❌ Нельзя делить на ноль!")
-    except:
-        await update.message.reply_text(
-            "❌ Ошибка в вычислении\n"
-            "Пример: 15 + 8"
-        )
-
-
-async def temp_converter(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Меню температуры"""
-    keyboard = [
-        ["25°C → F", "50°C → F"],
-        ["77°F → C", "100°F → C"]
-    ]
-    reply_markup = ReplyKeyboardMarkup(
-        keyboard, 
-        resize_keyboard=True, 
-        one_time_keyboard=True
-    )
-    
-    text = """
-🌡️ КОНВЕРТЕР ТЕМПЕРАТУРЫ
-
-Отправьте температуру:
-• 25C (Цельсий → Фаренгейт)
-• 77F (Фаренгейт → Цельсий)
-
-Или выберите пример:
-"""
-    await update.message.reply_text(text, reply_markup=reply_markup)
-
-
-async def handle_temperature(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Конвертация температуры"""
-    text = update.message.text.strip().upper()
-    text = text.replace('°', '').replace(' ', '')
-    
-    try:
-        if 'C' in text or 'С' in text:
-            # Цельсий → Фаренгейт
-            temp_str = text.replace('C', '').replace('С', '')
-            temp_str = temp_str.replace('→', '').replace('F', '').strip()
-            celsius = float(temp_str)
-            fahrenheit = (celsius * 9/5) + 32
-            
-            await update.message.reply_text(
-                f"🌡️ Конвертация:\n\n"
-                f"{celsius}°C = {fahrenheit:.1f}°F"
-            )
-        
-        elif 'F' in text:
-            # Фаренгейт → Цельсий
-            temp_str = text.replace('F', '').replace('→', '')
-            temp_str = temp_str.replace('C', '').replace('С', '').strip()
-            fahrenheit = float(temp_str)
-            celsius = (fahrenheit - 32) * 5/9
-            
-            await update.message.reply_text(
-                f"🌡️ Конвертация:\n\n"
-                f"{fahrenheit}°F = {celsius:.1f}°C"
-            )
-    except:
-        await update.message.reply_text(
-            "❌ Неверный формат!\n\n"
-            "Примеры: 25C или 77F"
-        )
+    except Exception as e:
+        logger.error(f"Ошибка вычисления: {e}")
+        await update.message.reply_text("❌ Ошибка. Пример: 15 + 8")
 
 
 def run_bot():
-    """Запуск Telegram бота в отдельном потоке"""
-    print("🤖 Запуск Telegram-бота...")
-    print(f"📡 Токен: {TOKEN[:10]}...")
-    
-    # Создаём приложение
-    application = Application.builder().token(TOKEN).build()
-    
-    # Регистрируем обработчики
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("temp", temp_converter))
-    application.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, calculate)
-    )
-    
-    print("✅ Бот запущен и готов к работе!")
-    print("⏳ Ожидание сообщений...")
-    
-    # Запускаем бота
-    application.run_polling(
-        allowed_updates=Update.ALL_TYPES,
-        drop_pending_updates=True
-    )
+    """Запуск бота"""
+    try:
+        logger.info("=" * 50)
+        logger.info("🤖 Запуск Telegram-бота...")
+        logger.info(f"📡 Токен: {TOKEN[:20]}...")
+        
+        # Создаём приложение
+        application = Application.builder().token(TOKEN).build()
+        
+        # Добавляем обработчики
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("help", help_command))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, calculate))
+        
+        logger.info("✅ Бот запущен!")
+        logger.info("⏳ Ожидание сообщений...")
+        
+        # Запускаем polling
+        application.run_polling(drop_pending_updates=True)
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка запуска бота: {e}")
+        logger.exception(e)
 
 
-def run_web_server():
-    """Запуск веб-сервера для Render"""
-    print(f"🌐 Запуск веб-сервера на порту {PORT}...")
-    app.run(host='0.0.0.0', port=PORT)
+def run_web():
+    """Запуск веб-сервера"""
+    logger.info(f"🌐 Запуск веб-сервера на порту {PORT}...")
+    app.run(host='0.0.0.0', port=PORT, debug=False)
 
 
 if __name__ == '__main__':
-    print("=" * 50)
-    print("🚀 ЗАПУСК СЕРВИСА")
-    print("=" * 50)
+    logger.info("=" * 50)
+    logger.info("🚀 СТАРТ СЕРВИСА")
+    logger.info("=" * 50)
     
-    # Запускаем бота в отдельном потоке
-    bot_thread = Thread(target=run_bot)
-    bot_thread.daemon = True
+    # Бот в отдельном потоке
+    bot_thread = Thread(target=run_bot, daemon=True)
     bot_thread.start()
     
-    # Запускаем веб-сервер в основном потоке
-    # (Render проверяет что порт открыт)
-    run_web_server()
+    # Веб-сервер в основном потоке
+    run_web()
+    
