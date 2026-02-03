@@ -1,6 +1,6 @@
 """
-Crypto & Currency Tracker Bot
-Бот для отслеживания курсов криптовалют и валют
+Crypto & Currency Tracker Bot - Improved Version
+Улучшенная версия с обработкой ошибок
 """
 
 import os
@@ -8,7 +8,7 @@ import logging
 import requests
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 # Настройка логирования
 logging.basicConfig(
@@ -23,9 +23,12 @@ if not TOKEN:
     logger.error("❌ BOT_TOKEN not found!")
     exit(1)
 
-# API для получения данных
+# API endpoints
 CRYPTO_API = "https://api.coingecko.com/api/v3/simple/price"
 CURRENCY_API = "https://api.exchangerate-api.com/v4/latest/USD"
+
+# Альтернативное API для валют
+CURRENCY_API_ALT = "https://open.er-api.com/v6/latest/USD"
 
 
 # === ФУНКЦИИ ПОЛУЧЕНИЯ ДАННЫХ ===
@@ -33,33 +36,63 @@ CURRENCY_API = "https://api.exchangerate-api.com/v4/latest/USD"
 def get_crypto_prices():
     """Получить цены криптовалют"""
     try:
+        logger.info("Запрос к CoinGecko API...")
         params = {
             'ids': 'bitcoin,ethereum,tether,binancecoin,solana,ripple,cardano,dogecoin',
             'vs_currencies': 'usd',
             'include_24hr_change': 'true'
         }
-        response = requests.get(CRYPTO_API, params=params, timeout=10)
+        
+        response = requests.get(CRYPTO_API, params=params, timeout=15)
+        logger.info(f"CoinGecko ответ: {response.status_code}")
         
         if response.status_code == 200:
-            return response.json()
+            data = response.json()
+            logger.info(f"Получено {len(data)} монет")
+            return data
         else:
             logger.error(f"API error: {response.status_code}")
             return None
+            
+    except requests.exceptions.Timeout:
+        logger.error("Timeout при запросе к CoinGecko")
+        return None
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Request error: {e}")
+        return None
     except Exception as e:
-        logger.error(f"Error getting crypto prices: {e}")
+        logger.error(f"Unexpected error: {e}")
         return None
 
 
 def get_currency_rates():
-    """Получить курсы валют"""
+    """Получить курсы валют с резервным API"""
     try:
-        response = requests.get(CURRENCY_API, timeout=10)
+        logger.info("Запрос курсов валют...")
+        
+        # Пробуем основное API
+        try:
+            response = requests.get(CURRENCY_API, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                rates = data.get('rates', {})
+                logger.info(f"Получено {len(rates)} валют")
+                return rates
+        except:
+            logger.warning("Основное API недоступно, пробуем альтернативное...")
+        
+        # Пробуем альтернативное API
+        response = requests.get(CURRENCY_API_ALT, timeout=10)
         
         if response.status_code == 200:
             data = response.json()
-            return data.get('rates', {})
-        else:
-            return None
+            rates = data.get('rates', {})
+            logger.info(f"Получено {len(rates)} валют (альтернативное API)")
+            return rates
+        
+        return None
+        
     except Exception as e:
         logger.error(f"Error getting currency rates: {e}")
         return None
@@ -76,7 +109,7 @@ def format_price(price):
 
 
 def format_change(change):
-    """Форматирование изменения за 24ч"""
+    """Форматирование изменения"""
     if change > 0:
         return f"🟢 +{change:.2f}%"
     else:
@@ -95,7 +128,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("💵 Валюты", callback_data='currency')
         ],
         [
-            InlineKeyboardButton("📊 Всё сразу", callback_data='all'),
+            InlineKeyboardButton("₿ Bitcoin", callback_data='btc'),
+            InlineKeyboardButton("Ξ Ethereum", callback_data='eth')
+        ],
+        [
+            InlineKeyboardButton("💵 USD/RUB", callback_data='usd'),
             InlineKeyboardButton("❓ Помощь", callback_data='help')
         ]
     ]
@@ -105,70 +142,82 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 Я бот для отслеживания курсов! 📊
 
-💰 Криптовалюты:
-Bitcoin, Ethereum, Solana и др.
+<b>Что я показываю:</b>
 
-💵 Валюты:
-USD, EUR, GBP, CNY и др.
+💰 <b>Криптовалюты:</b>
+• Bitcoin, Ethereum, Solana
+• BNB, XRP, Cardano, Dogecoin
+
+💵 <b>Валюты:</b>
+• USD, EUR, GBP, RUB
+• CNY, JPY, TRY и другие
+
+📊 Данные в реальном времени!
 
 Выбери что показать:"""
     
-    await update.message.reply_text(message, reply_markup=reply_markup)
-    logger.info(f"👤 Пользователь {user} запустил бота")
+    await update.message.reply_text(
+        message, 
+        reply_markup=reply_markup,
+        parse_mode='HTML'
+    )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /help"""
-    message = """📚 Инструкция:
+    message = """📚 <b>ИНСТРУКЦИЯ</b>
 
-🔹 Команды:
+<b>Команды:</b>
 /start - главное меню
-/crypto - курсы криптовалют
-/currency - курсы валют
-/btc - только Bitcoin
-/eth - только Ethereum
-/usd - доллар к рублю
+/crypto - все криптовалюты
+/currency - все валюты
+/btc - детали Bitcoin
+/eth - детали Ethereum
+/usd - курс USD/RUB
 /help - эта справка
 
-🔹 Криптовалюты:
-• Bitcoin (BTC)
-• Ethereum (ETH)
-• Solana (SOL)
-• Ripple (XRP)
-• И другие...
+<b>Криптовалюты:</b>
+Bitcoin, Ethereum, Solana,
+BNB, XRP, Cardano, Dogecoin
 
-🔹 Валюты:
-• USD, EUR, GBP
-• RUB, CNY, JPY
-• И многие другие
+<b>Валюты:</b>
+USD, EUR, GBP, RUB, CNY,
+JPY, TRY, UAH, KZT
 
-Данные обновляются в реальном времени! 🔄"""
+Данные обновляются
+в реальном времени! 🔄"""
     
-    await update.message.reply_text(message)
+    await update.message.reply_text(message, parse_mode='HTML')
 
 
 async def crypto_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /crypto - показать криптовалюты"""
-    await update.message.reply_text("⏳ Получаю данные...")
+    """Показать криптовалюты"""
+    msg = await update.message.reply_text("⏳ Получаю данные...",parse_mode='HTML')
     
     prices = get_crypto_prices()
     
     if not prices:
-        await update.message.reply_text("❌ Ошибка при получении данных. Попробуйте позже.")
+        await msg.edit_text(
+            "❌ <b>Ошибка получения данных</b>\n\n"
+            "Возможные причины:\n"
+            "• API временно недоступен\n"
+            "• Проблемы с сетью\n\n"
+            "Попробуйте через минуту ⏱️",
+            parse_mode='HTML'
+        )
         return
     
-    # Формируем сообщение
     message = "💰 <b>КРИПТОВАЛЮТЫ</b>\n\n"
     
     crypto_names = {
         'bitcoin': '₿ Bitcoin (BTC)',
         'ethereum': 'Ξ Ethereum (ETH)',
-        'tether': '₮ Tether (USDT)',
-        'binancecoin': '🔶 BNB',
         'solana': '◎ Solana (SOL)',
         'ripple': '✕ Ripple (XRP)',
         'cardano': '₳ Cardano (ADA)',
-        'dogecoin': 'Ð Dogecoin (DOGE)'
+        'binancecoin': '🔶 BNB',
+        'dogecoin': 'Ð Dogecoin (DOGE)',
+        'tether': '₮ Tether (USDT)'
     }
     
     for crypto_id, name in crypto_names.items():
@@ -176,158 +225,153 @@ async def crypto_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             price = prices[crypto_id].get('usd', 0)
             change = prices[crypto_id].get('usd_24h_change', 0)
             
-            message += f"{name}\n"
+            message += f"<b>{name}</b>\n"
             message += f"💵 {format_price(price)}\n"
             message += f"📊 24ч: {format_change(change)}\n\n"
     
-    # Добавляем время обновления
-    now = datetime.now().strftime("%H:%M:%S")
+    now = datetime.now().strftime("%H:%M")
     message += f"🕐 Обновлено: {now}"
     
-    # Кнопки
     keyboard = [
         [InlineKeyboardButton("🔄 Обновить", callback_data='crypto')],
-        [InlineKeyboardButton("◀️ Назад", callback_data='back')]
+        [InlineKeyboardButton("◀️ Меню", callback_data='back')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await update.message.reply_text(message, parse_mode='HTML', reply_markup=reply_markup)
+    await msg.edit_text(message, parse_mode='HTML', reply_markup=reply_markup)
 
 
 async def currency_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /currency - показать валюты"""
-    await update.message.reply_text("⏳ Получаю курсы валют...")
+    """Показать валюты"""
+    msg = await update.message.reply_text("⏳ Получаю курсы...", parse_mode='HTML')
     
     rates = get_currency_rates()
     
     if not rates:
-        await update.message.reply_text("❌ Ошибка при получении данных. Попробуйте позже.")
+        await msg.edit_text(
+            "❌ <b>Ошибка получения данных</b>\n\n"
+            "API валют недоступен.\n"
+            "Попробуйте через минуту ⏱️",
+            parse_mode='HTML'
+        )
         return
     
-    # USD = 1, пересчитываем
     message = "💵 <b>КУРСЫ ВАЛЮТ</b>\n\n"
     message += "Относительно 1 USD:\n\n"
     
     currencies = {
-        'RUB': '🇷🇺 Российский рубль',
+        'RUB': '🇷🇺 Рубль',
         'EUR': '🇪🇺 Евро',
-        'GBP': '🇬🇧 Фунт стерлингов',
-        'JPY': '🇯🇵 Японская йена',
-        'CNY': '🇨🇳 Китайский юань',
-        'TRY': '🇹🇷 Турецкая лира',
-        'UAH': '🇺🇦 Украинская гривна',
-        'KZT': '🇰🇿 Казахский тенге'
+        'GBP': '🇬🇧 Фунт',
+        'JPY': '🇯🇵 Йена',
+        'CNY': '🇨🇳 Юань',
+        'TRY': '🇹🇷 Лира'
     }
     
     for code, name in currencies.items():
         if code in rates:
             rate = rates[code]
-            message += f"{name}\n"
+            message += f"<b>{name}</b>\n"
             message += f"💰 {rate:.2f} {code}\n\n"
     
-    # Также покажем обратные курсы (к рублю)
-    if 'RUB' in rates:
+    if 'RUB' in rates and 'EUR' in rates:
         rub_rate = rates['RUB']
-        message += "━━━━━━━━━━━━━━━\n"
+        eur_to_rub = rub_rate / rates['EUR']
+        message += "━━━━━━━━━━━\n"
         message += f"<b>1 USD = {rub_rate:.2f} RUB</b>\n"
-        
-        if 'EUR' in rates:
-            eur_to_rub = rates['RUB'] / rates['EUR']
-            message += f"<b>1 EUR = {eur_to_rub:.2f} RUB</b>\n"
+        message += f"<b>1 EUR = {eur_to_rub:.2f} RUB</b>\n"
     
-    now = datetime.now().strftime("%H:%M:%S")
-    message += f"\n🕐 Обновлено: {now}"
+    now = datetime.now().strftime("%H:%M")
+    message += f"\n🕐 {now}"
     
     keyboard = [
         [InlineKeyboardButton("🔄 Обновить", callback_data='currency')],
-        [InlineKeyboardButton("◀️ Назад", callback_data='back')]
+        [InlineKeyboardButton("◀️ Меню", callback_data='back')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await update.message.reply_text(message, parse_mode='HTML', reply_markup=reply_markup)
+    await msg.edit_text(message, parse_mode='HTML', reply_markup=reply_markup)
 
 
 async def btc_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /btc - только Bitcoin"""
-    await update.message.reply_text("⏳ Получаю курс Bitcoin...")
+    """Детали Bitcoin"""
+    msg = await update.message.reply_text("⏳ Загрузка...", parse_mode='HTML')
     
     try:
         params = {
             'ids': 'bitcoin',
             'vs_currencies': 'usd,rub',
-            'include_24hr_change': 'true',
-            'include_market_cap': 'true'
+            'include_24hr_change': 'true'
         }
-        response = requests.get(CRYPTO_API, params=params, timeout=10)
-        data = response.json()
+        response = requests.get(CRYPTO_API, params=params, timeout=15)
         
-        if 'bitcoin' in data:
-            btc = data['bitcoin']
+        if response.status_code == 200:
+            data = response.json()
             
-            message = "₿ <b>BITCOIN (BTC)</b>\n\n"
-            message += f"💵 USD: {format_price(btc['usd'])}\n"
-            
-            if 'rub' in btc:
-                message += f"🇷🇺 RUB: {btc['rub']:,.0f} ₽\n"
-            
-            message += f"\n📊 Изменение 24ч:\n"
-            message += f"{format_change(btc.get('usd_24h_change', 0))}\n"
-            
-            if 'usd_market_cap' in btc:
-                mcap = btc['usd_market_cap'] / 1_000_000_000
-                message += f"\n💎 Капитализация:\n${mcap:,.0f}B"
-            
-            await update.message.reply_text(message, parse_mode='HTML')
+            if 'bitcoin' in data:
+                btc = data['bitcoin']
+                
+                message = "₿ <b>BITCOIN (BTC)</b>\n\n"
+                message += f"💵 <b>USD:</b> {format_price(btc['usd'])}\n"
+                
+                if 'rub' in btc:
+                    message += f"🇷🇺 <b>RUB:</b> {btc['rub']:,.0f} ₽\n"
+                
+                message += f"\n📊 <b>Изменение 24ч:</b>\n"
+                message += f"{format_change(btc.get('usd_24h_change', 0))}"
+                
+                await msg.edit_text(message, parse_mode='HTML')
+            else:
+                await msg.edit_text("❌ Данные недоступны", parse_mode='HTML')
         else:
-            await update.message.reply_text("❌ Ошибка получения данных")
+            await msg.edit_text("❌ Ошибка API", parse_mode='HTML')
     
     except Exception as e:
-        logger.error(f"BTC command error: {e}")
-        await update.message.reply_text("❌ Ошибка при получении данных")
+        logger.error(f"BTC error: {e}")
+        await msg.edit_text("❌ Ошибка получения данных", parse_mode='HTML')
 
 
 async def eth_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /eth - только Ethereum"""
-    await update.message.reply_text("⏳ Получаю курс Ethereum...")
+    """Детали Ethereum"""
+    msg = await update.message.reply_text("⏳ Загрузка...", parse_mode='HTML')
     
     try:
         params = {
             'ids': 'ethereum',
             'vs_currencies': 'usd,rub',
-            'include_24hr_change': 'true',
-            'include_market_cap': 'true'
+            'include_24hr_change': 'true'
         }
-        response = requests.get(CRYPTO_API, params=params, timeout=10)
-        data = response.json()
+        response = requests.get(CRYPTO_API, params=params, timeout=15)
         
-        if 'ethereum' in data:
-            eth = data['ethereum']
+        if response.status_code == 200:
+            data = response.json()
             
-            message = "Ξ <b>ETHEREUM (ETH)</b>\n\n"
-            message += f"💵 USD: {format_price(eth['usd'])}\n"
-            
-            if 'rub' in eth:
-                message += f"🇷🇺 RUB: {eth['rub']:,.0f} ₽\n"
-            
-            message += f"\n📊 Изменение 24ч:\n"
-            message += f"{format_change(eth.get('usd_24h_change', 0))}\n"
-            
-            if 'usd_market_cap' in eth:
-                mcap = eth['usd_market_cap'] / 1_000_000_000
-                message += f"\n💎 Капитализация:\n${mcap:,.0f}B"
-            
-            await update.message.reply_text(message, parse_mode='HTML')
+            if 'ethereum' in data:
+                eth = data['ethereum']
+                
+                message = "Ξ <b>ETHEREUM (ETH)</b>\n\n"
+                message += f"💵 <b>USD:</b> {format_price(eth['usd'])}\n"
+                
+                if 'rub' in eth:
+                    message += f"🇷🇺 <b>RUB:</b> {eth['rub']:,.0f} ₽\n"
+                
+                message += f"\n📊 <b>Изменение 24ч:</b>\n"
+                message += f"{format_change(eth.get('usd_24h_change', 0))}"
+                
+                await msg.edit_text(message, parse_mode='HTML')
+            else:
+                await msg.edit_text("❌ Данные недоступны", parse_mode='HTML')
         else:
-            await update.message.reply_text("❌ Ошибка получения данных")
+            await msg.edit_text("❌ Ошибка API", parse_mode='HTML')
     
     except Exception as e:
-        logger.error(f"ETH command error: {e}")
-        await update.message.reply_text("❌ Ошибка при получении данных")
+        logger.error(f"ETH error: {e}")
+        await msg.edit_text("❌ Ошибка получения данных", parse_mode='HTML')
 
 
 async def usd_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /usd - курс доллара"""
-    await update.message.reply_text("⏳ Получаю курс USD...")
+    """Курс доллара"""
+    msg = await update.message.reply_text("⏳ Загрузка...", parse_mode='HTML')
     
     rates = get_currency_rates()
     
@@ -335,42 +379,44 @@ async def usd_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rub_rate = rates['RUB']
         
         message = "💵 <b>ДОЛЛАР США</b>\n\n"
-        message += f"1 USD = {rub_rate:.2f} RUB\n"
-        message += f"1 RUB = {1/rub_rate:.4f} USD\n\n"
+        message += f"<b>1 USD = {rub_rate:.2f} RUB</b>\n\n"
         message += f"100 USD = {rub_rate*100:,.2f} RUB\n"
         message += f"1000 USD = {rub_rate*1000:,.2f} RUB"
         
-        await update.message.reply_text(message, parse_mode='HTML')
+        await msg.edit_text(message, parse_mode='HTML')
     else:
-        await update.message.reply_text("❌ Ошибка получения данных")
+        await msg.edit_text("❌ Ошибка получения данных", parse_mode='HTML')
 
 
 # === ОБРАБОТЧИК КНОПОК ===
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка нажатий на кнопки"""
+    """Обработка кнопок"""
     query = update.callback_query
     await query.answer()
     
     if query.data == 'crypto':
-        # Отправляем данные о крипте
+        await query.edit_message_text("⏳ Загрузка...", parse_mode='HTML')
+        
         prices = get_crypto_prices()
         
         if not prices:
-            await query.edit_message_text("❌ Ошибка при получении данных")
+            await query.edit_message_text(
+                "❌ Ошибка получения данных\nПопробуйте позже",
+                parse_mode='HTML'
+            )
             return
         
         message = "💰 <b>КРИПТОВАЛЮТЫ</b>\n\n"
         
         crypto_names = {
-            'bitcoin': '₿ Bitcoin (BTC)',
-            'ethereum': 'Ξ Ethereum (ETH)',
-            'tether': '₮ Tether (USDT)',
+            'bitcoin': '₿ Bitcoin',
+            'ethereum': 'Ξ Ethereum',
+            'solana': '◎ Solana',
+            'ripple': '✕ Ripple',
+            'cardano': '₳ Cardano',
             'binancecoin': '🔶 BNB',
-            'solana': '◎ Solana (SOL)',
-            'ripple': '✕ Ripple (XRP)',
-            'cardano': '₳ Cardano (ADA)',
-            'dogecoin': 'Ð Dogecoin (DOGE)'
+            'dogecoin': 'Ð Dogecoin'
         }
         
         for crypto_id, name in crypto_names.items():
@@ -378,104 +424,96 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 price = prices[crypto_id].get('usd', 0)
                 change = prices[crypto_id].get('usd_24h_change', 0)
                 
-                message += f"{name}\n"
-                message += f"💵 {format_price(price)}\n"
-                message += f"📊 24ч: {format_change(change)}\n\n"
+                message += f"<b>{name}</b>\n"
+                message += f"{format_price(price)} {format_change(change)}\n\n"
         
-        now = datetime.now().strftime("%H:%M:%S")
-        message += f"🕐 Обновлено: {now}"
+        now = datetime.now().strftime("%H:%M")
+        message += f"🕐 {now}"
         
         keyboard = [
             [InlineKeyboardButton("🔄 Обновить", callback_data='crypto')],
-            [InlineKeyboardButton("◀️ Назад", callback_data='back')]
+            [InlineKeyboardButton("◀️ Меню", callback_data='back')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(message, parse_mode='HTML', reply_markup=reply_markup)
     
     elif query.data == 'currency':
-        # Отправляем курсы валют
+        await query.edit_message_text("⏳ Загрузка...", parse_mode='HTML')
+        
         rates = get_currency_rates()
         
         if not rates:
-            await query.edit_message_text("❌ Ошибка при получении данных")
+            await query.edit_message_text("❌ Ошибка", parse_mode='HTML')
             return
         
-        message = "💵 <b>КУРСЫ ВАЛЮТ</b>\n\n"
-        message += "Относительно 1 USD:\n\n"
+        message = "💵 <b>ВАЛЮТЫ</b>\n\n"
         
         currencies = {
-            'RUB': '🇷🇺 Российский рубль',
+            'RUB': '🇷🇺 Рубль',
             'EUR': '🇪🇺 Евро',
-            'GBP': '🇬🇧 Фунт стерлингов',
-            'JPY': '🇯🇵 Японская йена',
-            'CNY': '🇨🇳 Китайский юань',
-            'TRY': '🇹🇷 Турецкая лира'
+            'GBP': '🇬🇧 Фунт',
+            'CNY': '🇨🇳 Юань'
         }
         
         for code, name in currencies.items():
             if code in rates:
-                rate = rates[code]
-                message += f"{name}\n💰 {rate:.2f} {code}\n\n"
+                message += f"<b>{name}:</b> {rates[code]:.2f}\n"
         
         if 'RUB' in rates:
-            rub_rate = rates['RUB']
-            message += "━━━━━━━━━━━━━━━\n"
-            message += f"<b>1 USD = {rub_rate:.2f} RUB</b>\n"
-        
-        now = datetime.now().strftime("%H:%M:%S")
-        message += f"\n🕐 Обновлено: {now}"
+            message += f"\n<b>1 USD = {rates['RUB']:.2f} RUB</b>"
         
         keyboard = [
             [InlineKeyboardButton("🔄 Обновить", callback_data='currency')],
-            [InlineKeyboardButton("◀️ Назад", callback_data='back')]
+            [InlineKeyboardButton("◀️ Меню", callback_data='back')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(message, parse_mode='HTML', reply_markup=reply_markup)
     
-    elif query.data == 'all':
-        await query.edit_message_text("⏳ Загружаю все данные...")
-        # Можно добавить показ всего сразу
-        await query.edit_message_text("Используй команды:\n/crypto - криптовалюты\n/currency - валюты")
+    elif query.data in ['btc', 'eth', 'usd']:
+        await query.edit_message_text(
+            f"Используйте команду /{query.data}",
+            parse_mode='HTML'
+        )
     
     elif query.data == 'help':
-        message = """📚 Инструкция:
+        message = """📚 <b>КОМАНДЫ</b>
 
-🔹 Команды:
-/start - главное меню
+/start - меню
 /crypto - криптовалюты
 /currency - валюты
 /btc - Bitcoin
 /eth - Ethereum
-/usd - доллар
+/usd - USD/RUB
 
-Данные в реальном времени! 🔄"""
+Данные в реальном времени!"""
         
-        keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data='back')]]
+        keyboard = [[InlineKeyboardButton("◀️ Меню", callback_data='back')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await query.edit_message_text(message, reply_markup=reply_markup)
+        await query.edit_message_text(message, parse_mode='HTML', reply_markup=reply_markup)
     
     elif query.data == 'back':
-        # Возврат в главное меню
         keyboard = [
             [
                 InlineKeyboardButton("💰 Криптовалюты", callback_data='crypto'),
                 InlineKeyboardButton("💵 Валюты", callback_data='currency')
             ],
             [
-                InlineKeyboardButton("📊 Всё сразу", callback_data='all'),
+                InlineKeyboardButton("₿ Bitcoin", callback_data='btc'),
+                InlineKeyboardButton("Ξ Ethereum", callback_data='eth')
+            ],
+            [
+                InlineKeyboardButton("💵 USD/RUB", callback_data='usd'),
                 InlineKeyboardButton("❓ Помощь", callback_data='help')
             ]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        message = """📊 Главное меню
-
-Выбери что показать:"""
+        message = "📊 <b>Главное меню</b>\n\nВыбери что показать:"
         
-        await query.edit_message_text(message, reply_markup=reply_markup)
+        await query.edit_message_text(message, parse_mode='HTML', reply_markup=reply_markup)
 
 
 # === ГЛАВНАЯ ФУНКЦИЯ ===
@@ -483,13 +521,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     """Запуск бота"""
     logger.info("=" * 60)
-    logger.info("🚀 ЗАПУСК CRYPTO TRACKER BOT")
+    logger.info("🚀 CRYPTO TRACKER BOT")
     logger.info("=" * 60)
     
     try:
         application = Application.builder().token(TOKEN).build()
         
-        # Команды
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("help", help_command))
         application.add_handler(CommandHandler("crypto", crypto_command))
@@ -497,12 +534,10 @@ def main():
         application.add_handler(CommandHandler("btc", btc_command))
         application.add_handler(CommandHandler("eth", eth_command))
         application.add_handler(CommandHandler("usd", usd_command))
-        
-        # Кнопки
         application.add_handler(CallbackQueryHandler(button_handler))
         
-        logger.info("✅ Обработчики зарегистрированы")
-        logger.info("⏳ Запуск polling...")
+        logger.info("✅ Handlers registered")
+        logger.info("⏳ Starting polling...")
         
         application.run_polling(
             allowed_updates=Update.ALL_TYPES,
@@ -510,11 +545,10 @@ def main():
         )
         
     except Exception as e:
-        logger.error(f"❌ Критическая ошибка: {e}")
-        logger.exception(e)
+        logger.error(f"❌ Critical error: {e}")
         exit(1)
 
 
 if __name__ == '__main__':
     main()
-    
+        
