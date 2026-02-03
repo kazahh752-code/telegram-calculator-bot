@@ -1,14 +1,14 @@
 """
-Crypto & Currency Tracker Bot - Improved Version
-Улучшенная версия с обработкой ошибок
+Бот "Слово дня - Русский жестовый язык"
+На основе учебников И.Ф. Гейльман, А.Е. Харламенкова
 """
 
 import os
 import logging
-import requests
+import random
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
 # Настройка логирования
 logging.basicConfig(
@@ -23,97 +23,446 @@ if not TOKEN:
     logger.error("❌ BOT_TOKEN not found!")
     exit(1)
 
-# API endpoints
-CRYPTO_API = "https://api.coingecko.com/api/v3/simple/price"
-CURRENCY_API = "https://api.exchangerate-api.com/v4/latest/USD"
 
-# Альтернативное API для валют
-CURRENCY_API_ALT = "https://open.er-api.com/v6/latest/USD"
+# === БАЗА ЖЕСТОВ РЖЯ ===
+
+GESTURES_DB = {
+    "привет": {
+        "gesture_name": "Рука вверх с махом",
+        "main_meaning": "ПРИВЕТ",
+        "alternative_meanings": [
+            {
+                "word": "ЗДРАВСТВУЙ",
+                "context": "Формальное приветствие",
+                "example": "Здравствуй, как дела?",
+                "difference": "Более медленное движение"
+            },
+            {
+                "word": "ПРИВЕТСТВУЮ",
+                "context": "Официальное обращение",
+                "example": "Приветствую вас!",
+                "difference": "Рука выше, движение четче"
+            },
+            {
+                "word": "САЛЮТ",
+                "context": "Неформальное, молодёжное",
+                "example": "Салют, друзья!",
+                "difference": "Быстрое, энергичное движение"
+            }
+        ],
+        "description": "Поднимите правую руку на уровень головы ладонью вперёд. Помашите кистью из стороны в сторону 2-3 раза. Движение свободное, дружелюбное.",
+        "examples": [
+            "Привет! Как дела?",
+            "Здравствуй, рад тебя видеть!",
+            "Приветствую вас на встрече!"
+        ],
+        "category": "Приветствия",
+        "difficulty": "Лёгкий",
+        "tips": "Улыбайтесь! Зрительный контакт важен. Махи не слишком широкие.",
+        "common_mistakes": "Не машите всей рукой от плеча — только кисть!",
+        "gif_path": None  # Для будущих GIF
+    },
+    
+    "спасибо": {
+        "gesture_name": "Рука от сердца вперёд",
+        "main_meaning": "СПАСИБО",
+        "alternative_meanings": [
+            {
+                "word": "БЛАГОДАРЮ",
+                "context": "Более формальное",
+                "example": "Благодарю за помощь",
+                "difference": "Рука дольше у сердца, затем плавно вперёд"
+            },
+            {
+                "word": "БЛАГОДАРНОСТЬ",
+                "context": "Существительное",
+                "example": "Выражаю благодарность",
+                "difference": "Обе руки к сердцу, затем вперёд"
+            },
+            {
+                "word": "ПРИЗНАТЕЛЬНОСТЬ",
+                "context": "Глубокая благодарность",
+                "example": "Я вам очень признателен",
+                "difference": "Движение медленнее, с наклоном головы"
+            }
+        ],
+        "description": "Правую руку прижмите к груди в области сердца (пальцы вместе, ладонь к себе). Затем плавно выведите руку вперёд, раскрывая ладонь вверх, как бы отдавая благодарность от сердца.",
+        "examples": [
+            "Спасибо за помощь!",
+            "Благодарю вас!",
+            "Спасибо, очень приятно!"
+        ],
+        "category": "Вежливость",
+        "difficulty": "Лёгкий",
+        "tips": "Движение должно быть искренним, от сердца. Можно добавить лёгкий поклон головой.",
+        "common_mistakes": "Не делайте резко — движение плавное и душевное.",
+        "gif_path": None
+    },
+    
+    "пожалуйста": {
+        "gesture_name": "Открытая ладонь вперёд",
+        "main_meaning": "ПОЖАЛУЙСТА",
+        "alternative_meanings": [
+            {
+                "word": "ПРОШУ",
+                "context": "Вежливая просьба",
+                "example": "Прошу вас помочь",
+                "difference": "Ладонь чуть наклонена к собе"
+            },
+            {
+                "word": "УГОЩАЙТЕСЬ",
+                "context": "Предложение",
+                "example": "Угощайтесь, пожалуйста",
+                "difference": "Движение ладони в сторону угощения"
+            },
+            {
+                "word": "НЕ ЗА ЧТО",
+                "context": "Ответ на спасибо",
+                "example": "Не за что, обращайтесь!",
+                "difference": "Легкое покачивание ладони"
+            }
+        ],
+        "description": "Вытяните правую руку вперёд ладонью вверх, пальцы вместе. Сделайте плавное приглашающее движение к собеседнику или в сторону предмета.",
+        "examples": [
+            "Пожалуйста, проходите",
+            "Прошу вас",
+            "Не за что!"
+        ],
+        "category": "Вежливость",
+        "difficulty": "Лёгкий",
+        "tips": "Жест должен быть открытым и приглашающим. Улыбка обязательна!",
+        "common_mistakes": "Не держите ладонь вертикально — только горизонтально или чуть вверх.",
+        "gif_path": None
+    },
+    
+    "да": {
+        "gesture_name": "Кивок головой",
+        "main_meaning": "ДА",
+        "alternative_meanings": [
+            {
+                "word": "СОГЛАСЕН",
+                "context": "Выражение согласия",
+                "example": "Я согласен с вами",
+                "difference": "Более энергичный кивок"
+            },
+            {
+                "word": "ПРАВИЛЬНО",
+                "context": "Подтверждение правоты",
+                "example": "Правильно, именно так!",
+                "difference": "Кивок + указательный палец вверх"
+            },
+            {
+                "word": "КОНЕЧНО",
+                "context": "Уверенное согласие",
+                "example": "Конечно, помогу!",
+                "difference": "Быстрые уверенные кивки"
+            }
+        ],
+        "description": "Кивните головой вниз 1-2 раза. Можно дополнить жестом: кулак с поднятым большим пальцем вверх (знак одобрения).",
+        "examples": [
+            "Да, я согласен",
+            "Да, конечно!",
+            "Правильно!"
+        ],
+        "category": "Базовые слова",
+        "difficulty": "Лёгкий",
+        "tips": "Естественный кивок как в обычной жизни. Зрительный контакт!",
+        "common_mistakes": "Не киваёте слишком много раз — 1-2 достаточно.",
+        "gif_path": None
+    },
+    
+    "нет": {
+        "gesture_name": "Покачивание головой",
+        "main_meaning": "НЕТ",
+        "alternative_meanings": [
+            {
+                "word": "НЕ СОГЛАСЕН",
+                "context": "Несогласие",
+                "example": "Я не согласен с этим",
+                "difference": "Более медленное покачивание"
+            },
+            {
+                "word": "НЕПРАВИЛЬНО",
+                "context": "Указание на ошибку",
+                "example": "Неправильно, так не делается",
+                "difference": "Покачивание + палец из стороны в сторону"
+            },
+            {
+                "word": "НЕЛЬЗЯ",
+                "context": "Запрет",
+                "example": "Нельзя так делать!",
+                "difference": "Энергичное покачивание + строгая мимика"
+            }
+        ],
+        "description": "Покачайте головой из стороны в сторону 2-3 раза. Можно усилить жестом: указательный палец двигается из стороны в сторону перед собой.",
+        "examples": [
+            "Нет, я не могу",
+            "Нет, это неправильно",
+            "Нельзя!"
+        ],
+        "category": "Базовые слова",
+        "difficulty": "Лёгкий",
+        "tips": "Мимика важна! Покажите отрицание на лице.",
+        "common_mistakes": "Не кивайте вверх-вниз — только в стороны!",
+        "gif_path": None
+    },
+    
+    "понимаю": {
+        "gesture_name": "Рука к голове с кивком",
+        "main_meaning": "ПОНИМАЮ",
+        "alternative_meanings": [
+            {
+                "word": "ПОНЯЛ",
+                "context": "Подтверждение понимания",
+                "example": "Понял, сделаю",
+                "difference": "Резкое касание лба + кивок"
+            },
+            {
+                "word": "ЯСНО",
+                "context": "Понимание объяснения",
+                "example": "Ясно, теперь понятно",
+                "difference": "Легкое касание + улыбка"
+            },
+            {
+                "word": "ДОГАДАЛСЯ",
+                "context": "Осознание",
+                "example": "А, догадался!",
+                "difference": "Палец к виску + кивок"
+            }
+        ],
+        "description": "Коснитесь указательным пальцем лба или виска и кивните головой. Показывает, что информация 'вошла в голову'.",
+        "examples": [
+            "Понял, спасибо!",
+            "Ясно, теперь понятно",
+            "А, догадался!"
+        ],
+        "category": "Понимание и мышление",
+        "difficulty": "Лёгкий",
+        "tips": "Кивок головой усиливает понимание. Зрительный контакт обязателен.",
+        "common_mistakes": "Не путайте с жестом 'думать' (там круговые движения).",
+        "gif_path": None
+    },
+    
+    "думать": {
+        "gesture_name": "Круговые движения у головы",
+        "main_meaning": "ДУМАТЬ",
+        "alternative_meanings": [
+            {
+                "word": "РАЗМЫШЛЯТЬ",
+                "context": "Глубокое обдумывание",
+                "example": "Я долго размышлял над этим",
+                "difference": "Медленные круговые движения"
+            },
+            {
+                "word": "СООБРАЖАТЬ",
+                "context": "Умственная работа",
+                "example": "Нужно соображать быстрее",
+                "difference": "Быстрые движения у виска"
+            },
+            {
+                "word": "МОЗГИ (работают)",
+                "context": "Разговорное",
+                "example": "У меня мозги не варят",
+                "difference": "Круги указательным пальцем у виска"
+            }
+        ],
+        "description": "Указательным пальцем делайте круговые движения около виска или лба. Движение показывает 'работу мысли' в голове.",
+        "examples": [
+            "Я думаю над этим",
+            "Дай мне подумать",
+            "Надо соображать!"
+        ],
+        "category": "Понимание и мышление",
+        "difficulty": "Средний",
+        "tips": "Мимика задумчивости. Можно смотреть вверх или в сторону.",
+        "common_mistakes": "Не путайте с 'понимаю' — там касание без кругов.",
+        "gif_path": None
+    },
+    
+    "хорошо": {
+        "gesture_name": "Большой палец вверх",
+        "main_meaning": "ХОРОШО",
+        "alternative_meanings": [
+            {
+                "word": "ОТЛИЧНО",
+                "context": "Высокая оценка",
+                "example": "Отлично сделано!",
+                "difference": "Энергичный жест + улыбка"
+            },
+            {
+                "word": "ОК / ОКЕЙ",
+                "context": "Согласие, одобрение",
+                "example": "Окей, договорились",
+                "difference": "Кольцо из пальцев (большой + указательный)"
+            },
+            {
+                "word": "ЗДОРОВО",
+                "context": "Восхищение",
+                "example": "Здорово получилось!",
+                "difference": "Большой палец + кивки головой"
+            },
+            {
+                "word": "МОЛОДЕЦ",
+                "context": "Похвала",
+                "example": "Молодец, правильно!",
+                "difference": "Большой палец вверх + похлопывание"
+            }
+        ],
+        "description": "Сожмите руку в кулак, большой палец поднимите вверх. Жест энергичный, уверенный. Универсальный знак одобрения.",
+        "examples": [
+            "Как дела? — Хорошо!",
+            "Отлично, так и сделаем",
+            "Здорово получилось!"
+        ],
+        "category": "Эмоции и оценки",
+        "difficulty": "Лёгкий",
+        "tips": "Улыбка делает жест дружелюбнее. Можно добавить кивок.",
+        "common_mistakes": "Не опускайте палец вниз — только вверх означает 'хорошо'!",
+        "gif_path": None
+    },
+    
+    "плохо": {
+        "gesture_name": "Большой палец вниз",
+        "main_meaning": "ПЛОХО",
+        "alternative_meanings": [
+            {
+                "word": "УЖАСНО",
+                "context": "Сильная негативная оценка",
+                "example": "Ужасно получилось",
+                "difference": "Резкое движение вниз + гримаса"
+            },
+            {
+                "word": "НЕ НРАВИТСЯ",
+                "context": "Неодобрение",
+                "example": "Мне это не нравится",
+                "difference": "Покачивание головой + палец вниз"
+            },
+            {
+                "word": "ПРОВАЛ",
+                "context": "Неудача",
+                "example": "Полный провал",
+                "difference": "Палец резко вниз + мимика разочарования"
+            }
+        ],
+        "description": "Сожмите руку в кулак, большой палец направьте вниз. Мимика недовольства. Показывает негативную оценку.",
+        "examples": [
+            "Дела плохо",
+            "Это ужасно",
+            "Не нравится мне это"
+        ],
+        "category": "Эмоции и оценки",
+        "difficulty": "Лёгкий",
+        "tips": "Мимика важна — покажите недовольство на лице.",
+        "common_mistakes": "Не путайте с другими жестами — палец строго вниз.",
+        "gif_path": None
+    },
+    
+    "любовь": {
+        "gesture_name": "Рука к сердцу",
+        "main_meaning": "ЛЮБОВЬ",
+        "alternative_meanings": [
+            {
+                "word": "ЛЮБИТЬ",
+                "context": "Глагол, чувство",
+                "example": "Я тебя люблю",
+                "difference": "Круговое движение рукой на сердце"
+            },
+            {
+                "word": "НРАВИТЬСЯ (сильно)",
+                "context": "Сильная симпатия",
+                "example": "Мне это очень нравится",
+                "difference": "Легкое касание + улыбка"
+            },
+            {
+                "word": "ДОРОГОЙ",
+                "context": "О близком человеке",
+                "example": "Ты мне очень дорог",
+                "difference": "Рука задерживается на сердце"
+            },
+            {
+                "word": "ДУШЕВНЫЙ",
+                "context": "Об эмоциональной близости",
+                "example": "Душевный разговор",
+                "difference": "Плавное круговое движение"
+            }
+        ],
+        "description": "Прижмите правую руку (или обе руки) к груди в области сердца. Можно сделать мягкое круговое движение. Выражение лица тёплое, искреннее.",
+        "examples": [
+            "Я тебя люблю",
+            "Люблю свою семью",
+            "Это мне по душе"
+        ],
+        "category": "Эмоции и чувства",
+        "difficulty": "Средний",
+        "tips": "Искренность — главное. Мимика должна показывать тепло.",
+        "common_mistakes": "Не путайте с 'спасибо' — там рука движется вперёд.",
+        "gif_path": None
+    }
+}
+
+# Категории для навигации
+CATEGORIES = {
+    "Приветствия": ["привет"],
+    "Вежливость": ["спасибо", "пожалуйста"],
+    "Базовые слова": ["да", "нет"],
+    "Понимание и мышление": ["понимаю", "думать"],
+    "Эмоции и оценки": ["хорошо", "плохо"],
+    "Эмоции и чувства": ["любовь"]
+}
+
+# Для "слова дня" — меняется каждый день
+def get_word_of_day():
+    """Получить слово дня на основе даты"""
+    today = datetime.now().day
+    words = list(GESTURES_DB.keys())
+    index = today % len(words)
+    return words[index]
 
 
-# === ФУНКЦИИ ПОЛУЧЕНИЯ ДАННЫХ ===
+# === ФОРМАТИРОВАНИЕ СООБЩЕНИЙ ===
 
-def get_crypto_prices():
-    """Получить цены криптовалют"""
-    try:
-        logger.info("Запрос к CoinGecko API...")
-        params = {
-            'ids': 'bitcoin,ethereum,tether,binancecoin,solana,ripple,cardano,dogecoin',
-            'vs_currencies': 'usd',
-            'include_24hr_change': 'true'
-        }
-        
-        response = requests.get(CRYPTO_API, params=params, timeout=15)
-        logger.info(f"CoinGecko ответ: {response.status_code}")
-        
-        if response.status_code == 200:
-            data = response.json()
-            logger.info(f"Получено {len(data)} монет")
-            return data
-        else:
-            logger.error(f"API error: {response.status_code}")
-            return None
-            
-    except requests.exceptions.Timeout:
-        logger.error("Timeout при запросе к CoinGecko")
-        return None
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Request error: {e}")
-        return None
-    except Exception as e:
-        logger.error(f"Unexpected error: {e}")
-        return None
-
-
-def get_currency_rates():
-    """Получить курсы валют с резервным API"""
-    try:
-        logger.info("Запрос курсов валют...")
-        
-        # Пробуем основное API
-        try:
-            response = requests.get(CURRENCY_API, timeout=10)
-            
-            if response.status_code == 200:
-                data = response.json()
-                rates = data.get('rates', {})
-                logger.info(f"Получено {len(rates)} валют")
-                return rates
-        except:
-            logger.warning("Основное API недоступно, пробуем альтернативное...")
-        
-        # Пробуем альтернативное API
-        response = requests.get(CURRENCY_API_ALT, timeout=10)
-        
-        if response.status_code == 200:
-            data = response.json()
-            rates = data.get('rates', {})
-            logger.info(f"Получено {len(rates)} валют (альтернативное API)")
-            return rates
-        
-        return None
-        
-    except Exception as e:
-        logger.error(f"Error getting currency rates: {e}")
-        return None
+def format_gesture_full(gesture_key):
+    """Полное описание жеста"""
+    gesture = GESTURES_DB[gesture_key]
+    
+    message = f"🤟 <b>{gesture['main_meaning']}</b>\n\n"
+    message += f"✋ <b>Жест:</b> {gesture['gesture_name']}\n\n"
+    
+    # Описание
+    message += f"📝 <b>Как показать:</b>\n{gesture['description']}\n\n"
+    
+    # Альтернативные значения
+    if gesture['alternative_meanings']:
+        message += f"💭 <b>ДРУГИЕ ЗНАЧЕНИЯ ЭТОГО ЖЕСТА:</b>\n\n"
+        for i, alt in enumerate(gesture['alternative_meanings'], 1):
+            message += f"{i}️⃣ <b>{alt['word']}</b>\n"
+            message += f"   📌 {alt['context']}\n"
+            message += f"   💬 {alt['example']}\n"
+            message += f"   🔍 {alt['difference']}\n\n"
+    
+    # Примеры
+    message += f"💡 <b>Примеры фраз:</b>\n"
+    for example in gesture['examples']:
+        message += f"• {example}\n"
+    
+    message += f"\n⚠️ <b>Частая ошибка:</b>\n{gesture['common_mistakes']}\n\n"
+    message += f"💡 <b>Совет:</b> {gesture['tips']}\n\n"
+    message += f"📂 Категория: {gesture['category']}\n"
+    message += f"⭐ Сложность: {gesture['difficulty']}"
+    
+    return message
 
 
-def format_price(price):
-    """Форматирование цены"""
-    if price >= 1000:
-        return f"${price:,.2f}"
-    elif price >= 1:
-        return f"${price:.2f}"
-    else:
-        return f"${price:.6f}"
-
-
-def format_change(change):
-    """Форматирование изменения"""
-    if change > 0:
-        return f"🟢 +{change:.2f}%"
-    else:
-        return f"🔴 {change:.2f}%"
+def format_gesture_short(gesture_key):
+    """Краткое описание жеста"""
+    gesture = GESTURES_DB[gesture_key]
+    
+    message = f"🤟 <b>{gesture['main_meaning']}</b>\n\n"
+    message += f"✋ {gesture['gesture_name']}\n\n"
+    message += f"📝 {gesture['description'][:100]}...\n\n"
+    message += f"💭 Также: {', '.join([alt['word'] for alt in gesture['alternative_meanings'][:2]])}"
+    
+    return message
 
 
 # === ОБРАБОТЧИКИ КОМАНД ===
@@ -123,16 +472,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user.first_name
     
     keyboard = [
+        [InlineKeyboardButton("📅 Слово дня", callback_data='word_of_day')],
         [
-            InlineKeyboardButton("💰 Криптовалюты", callback_data='crypto'),
-            InlineKeyboardButton("💵 Валюты", callback_data='currency')
+            InlineKeyboardButton("📚 Категории", callback_data='categories'),
+            InlineKeyboardButton("🔍 Поиск", callback_data='search')
         ],
         [
-            InlineKeyboardButton("₿ Bitcoin", callback_data='btc'),
-            InlineKeyboardButton("Ξ Ethereum", callback_data='eth')
-        ],
-        [
-            InlineKeyboardButton("💵 USD/RUB", callback_data='usd'),
+            InlineKeyboardButton("📖 Все жесты", callback_data='all_gestures'),
             InlineKeyboardButton("❓ Помощь", callback_data='help')
         ]
     ]
@@ -140,24 +486,23 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     message = f"""👋 Привет, {user}!
 
-Я бот для отслеживания курсов! 📊
+Я помогу изучить <b>Русский жестовый язык</b>! 🤟
 
-<b>Что я показываю:</b>
+📚 <b>На основе учебников:</b>
+• И.Ф. Гейльман
+• А.Е. Харламенкова
 
-💰 <b>Криптовалюты:</b>
-• Bitcoin, Ethereum, Solana
-• BNB, XRP, Cardano, Dogecoin
+<b>Что я умею:</b>
 
-💵 <b>Валюты:</b>
-• USD, EUR, GBP, RUB
-• CNY, JPY, TRY и другие
+📅 Слово дня — каждый день новый жест
+📚 Категории — жесты по темам
+🔍 Поиск — найти нужный жест
+💭 Варианты значений — один жест, много смыслов
 
-📊 Данные в реальном времени!
-
-Выбери что показать:"""
+<b>Выбери что хочешь изучить:</b>"""
     
     await update.message.reply_text(
-        message, 
+        message,
         reply_markup=reply_markup,
         parse_mode='HTML'
     )
@@ -165,390 +510,70 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /help"""
-    message = """📚 <b>ИНСТРУКЦИЯ</b>
+    message = """📚 <b>КАК ПОЛЬЗОВАТЬСЯ БОТОМ</b>
 
 <b>Команды:</b>
 /start - главное меню
-/crypto - все криптовалюты
-/currency - все валюты
-/btc - детали Bitcoin
-/eth - детали Ethereum
-/usd - курс USD/RUB
+/word - слово дня
 /help - эта справка
 
-<b>Криптовалюты:</b>
-Bitcoin, Ethereum, Solana,
-BNB, XRP, Cardano, Dogecoin
+<b>Кнопки:</b>
+📅 Слово дня - ежедневный жест
+📚 Категории - жесты по темам
+🔍 Поиск - найти жест по слову
+📖 Все жесты - полный список
 
-<b>Валюты:</b>
-USD, EUR, GBP, RUB, CNY,
-JPY, TRY, UAH, KZT
+<b>Что показывается:</b>
+• Основное значение жеста
+• Другие значения этого же жеста
+• Как различить значения
+• Подробное описание
+• Примеры использования
+• Частые ошибки
+• Полезные советы
 
-Данные обновляются
-в реальном времени! 🔄"""
+<b>Категории жестов:</b>
+• Приветствия
+• Вежливость
+• Базовые слова
+• Понимание и мышление
+• Эмоции и оценки
+• Эмоции и чувства
+
+💡 <b>Совет:</b> Изучайте по 1-2 жеста в день, практикуйте перед зеркалом!"""
     
     await update.message.reply_text(message, parse_mode='HTML')
 
 
-async def crypto_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показать криптовалюты"""
-    msg = await update.message.reply_text("⏳ Получаю данные...",parse_mode='HTML')
-    
-    prices = get_crypto_prices()
-    
-    if not prices:
-        await msg.edit_text(
-            "❌ <b>Ошибка получения данных</b>\n\n"
-            "Возможные причины:\n"
-            "• API временно недоступен\n"
-            "• Проблемы с сетью\n\n"
-            "Попробуйте через минуту ⏱️",
-            parse_mode='HTML'
-        )
-        return
-    
-    message = "💰 <b>КРИПТОВАЛЮТЫ</b>\n\n"
-    
-    crypto_names = {
-        'bitcoin': '₿ Bitcoin (BTC)',
-        'ethereum': 'Ξ Ethereum (ETH)',
-        'solana': '◎ Solana (SOL)',
-        'ripple': '✕ Ripple (XRP)',
-        'cardano': '₳ Cardano (ADA)',
-        'binancecoin': '🔶 BNB',
-        'dogecoin': 'Ð Dogecoin (DOGE)',
-        'tether': '₮ Tether (USDT)'
-    }
-    
-    for crypto_id, name in crypto_names.items():
-        if crypto_id in prices:
-            price = prices[crypto_id].get('usd', 0)
-            change = prices[crypto_id].get('usd_24h_change', 0)
-            
-            message += f"<b>{name}</b>\n"
-            message += f"💵 {format_price(price)}\n"
-            message += f"📊 24ч: {format_change(change)}\n\n"
-    
-    now = datetime.now().strftime("%H:%M")
-    message += f"🕐 Обновлено: {now}"
+async def word_of_day_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /word - показать слово дня"""
+    word = get_word_of_day()
+    message = f"📅 <b>СЛОВО ДНЯ</b>\n\n{format_gesture_full(word)}"
     
     keyboard = [
-        [InlineKeyboardButton("🔄 Обновить", callback_data='crypto')],
-        [InlineKeyboardButton("◀️ Меню", callback_data='back')]
+        [InlineKeyboardButton("🔄 Случайный жест", callback_data='random_gesture')],
+        [InlineKeyboardButton("◀️ В меню", callback_data='back')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await msg.edit_text(message, parse_mode='HTML', reply_markup=reply_markup)
-
-
-async def currency_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показать валюты"""
-    msg = await update.message.reply_text("⏳ Получаю курсы...", parse_mode='HTML')
-    
-    rates = get_currency_rates()
-    
-    if not rates:
-        await msg.edit_text(
-            "❌ <b>Ошибка получения данных</b>\n\n"
-            "API валют недоступен.\n"
-            "Попробуйте через минуту ⏱️",
-            parse_mode='HTML'
-        )
-        return
-    
-    message = "💵 <b>КУРСЫ ВАЛЮТ</b>\n\n"
-    message += "Относительно 1 USD:\n\n"
-    
-    currencies = {
-        'RUB': '🇷🇺 Рубль',
-        'EUR': '🇪🇺 Евро',
-        'GBP': '🇬🇧 Фунт',
-        'JPY': '🇯🇵 Йена',
-        'CNY': '🇨🇳 Юань',
-        'TRY': '🇹🇷 Лира'
-    }
-    
-    for code, name in currencies.items():
-        if code in rates:
-            rate = rates[code]
-            message += f"<b>{name}</b>\n"
-            message += f"💰 {rate:.2f} {code}\n\n"
-    
-    if 'RUB' in rates and 'EUR' in rates:
-        rub_rate = rates['RUB']
-        eur_to_rub = rub_rate / rates['EUR']
-        message += "━━━━━━━━━━━\n"
-        message += f"<b>1 USD = {rub_rate:.2f} RUB</b>\n"
-        message += f"<b>1 EUR = {eur_to_rub:.2f} RUB</b>\n"
-    
-    now = datetime.now().strftime("%H:%M")
-    message += f"\n🕐 {now}"
-    
-    keyboard = [
-        [InlineKeyboardButton("🔄 Обновить", callback_data='currency')],
-        [InlineKeyboardButton("◀️ Меню", callback_data='back')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await msg.edit_text(message, parse_mode='HTML', reply_markup=reply_markup)
-
-
-async def btc_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Детали Bitcoin"""
-    msg = await update.message.reply_text("⏳ Загрузка...", parse_mode='HTML')
-    
-    try:
-        params = {
-            'ids': 'bitcoin',
-            'vs_currencies': 'usd,rub',
-            'include_24hr_change': 'true'
-        }
-        response = requests.get(CRYPTO_API, params=params, timeout=15)
-        
-        if response.status_code == 200:
-            data = response.json()
-            
-            if 'bitcoin' in data:
-                btc = data['bitcoin']
-                
-                message = "₿ <b>BITCOIN (BTC)</b>\n\n"
-                message += f"💵 <b>USD:</b> {format_price(btc['usd'])}\n"
-                
-                if 'rub' in btc:
-                    message += f"🇷🇺 <b>RUB:</b> {btc['rub']:,.0f} ₽\n"
-                
-                message += f"\n📊 <b>Изменение 24ч:</b>\n"
-                message += f"{format_change(btc.get('usd_24h_change', 0))}"
-                
-                await msg.edit_text(message, parse_mode='HTML')
-            else:
-                await msg.edit_text("❌ Данные недоступны", parse_mode='HTML')
-        else:
-            await msg.edit_text("❌ Ошибка API", parse_mode='HTML')
-    
-    except Exception as e:
-        logger.error(f"BTC error: {e}")
-        await msg.edit_text("❌ Ошибка получения данных", parse_mode='HTML')
-
-
-async def eth_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Детали Ethereum"""
-    msg = await update.message.reply_text("⏳ Загрузка...", parse_mode='HTML')
-    
-    try:
-        params = {
-            'ids': 'ethereum',
-            'vs_currencies': 'usd,rub',
-            'include_24hr_change': 'true'
-        }
-        response = requests.get(CRYPTO_API, params=params, timeout=15)
-        
-        if response.status_code == 200:
-            data = response.json()
-            
-            if 'ethereum' in data:
-                eth = data['ethereum']
-                
-                message = "Ξ <b>ETHEREUM (ETH)</b>\n\n"
-                message += f"💵 <b>USD:</b> {format_price(eth['usd'])}\n"
-                
-                if 'rub' in eth:
-                    message += f"🇷🇺 <b>RUB:</b> {eth['rub']:,.0f} ₽\n"
-                
-                message += f"\n📊 <b>Изменение 24ч:</b>\n"
-                message += f"{format_change(eth.get('usd_24h_change', 0))}"
-                
-                await msg.edit_text(message, parse_mode='HTML')
-            else:
-                await msg.edit_text("❌ Данные недоступны", parse_mode='HTML')
-        else:
-            await msg.edit_text("❌ Ошибка API", parse_mode='HTML')
-    
-    except Exception as e:
-        logger.error(f"ETH error: {e}")
-        await msg.edit_text("❌ Ошибка получения данных", parse_mode='HTML')
-
-
-async def usd_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Курс доллара"""
-    msg = await update.message.reply_text("⏳ Загрузка...", parse_mode='HTML')
-    
-    rates = get_currency_rates()
-    
-    if rates and 'RUB' in rates:
-        rub_rate = rates['RUB']
-        
-        message = "💵 <b>ДОЛЛАР США</b>\n\n"
-        message += f"<b>1 USD = {rub_rate:.2f} RUB</b>\n\n"
-        message += f"100 USD = {rub_rate*100:,.2f} RUB\n"
-        message += f"1000 USD = {rub_rate*1000:,.2f} RUB"
-        
-        await msg.edit_text(message, parse_mode='HTML')
-    else:
-        await msg.edit_text("❌ Ошибка получения данных", parse_mode='HTML')
+    await update.message.reply_text(
+        message,
+        reply_markup=reply_markup,
+        parse_mode='HTML'
+    )
 
 
 # === ОБРАБОТЧИК КНОПОК ===
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка кнопок"""
+    """Обработка нажатий на кнопки"""
     query = update.callback_query
     await query.answer()
     
-    if query.data == 'crypto':
-        await query.edit_message_text("⏳ Загрузка...", parse_mode='HTML')
-        
-        prices = get_crypto_prices()
-        
-        if not prices:
-            await query.edit_message_text(
-                "❌ Ошибка получения данных\nПопробуйте позже",
-                parse_mode='HTML'
-            )
-            return
-        
-        message = "💰 <b>КРИПТОВАЛЮТЫ</b>\n\n"
-        
-        crypto_names = {
-            'bitcoin': '₿ Bitcoin',
-            'ethereum': 'Ξ Ethereum',
-            'solana': '◎ Solana',
-            'ripple': '✕ Ripple',
-            'cardano': '₳ Cardano',
-            'binancecoin': '🔶 BNB',
-            'dogecoin': 'Ð Dogecoin'
-        }
-        
-        for crypto_id, name in crypto_names.items():
-            if crypto_id in prices:
-                price = prices[crypto_id].get('usd', 0)
-                change = prices[crypto_id].get('usd_24h_change', 0)
-                
-                message += f"<b>{name}</b>\n"
-                message += f"{format_price(price)} {format_change(change)}\n\n"
-        
-        now = datetime.now().strftime("%H:%M")
-        message += f"🕐 {now}"
+    if query.data == 'word_of_day':
+        word = get_word_of_day()
+        message = f"📅 <b>СЛОВО ДНЯ</b>\n\n{format_gesture_full(word)}"
         
         keyboard = [
-            [InlineKeyboardButton("🔄 Обновить", callback_data='crypto')],
-            [InlineKeyboardButton("◀️ Меню", callback_data='back')]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(message, parse_mode='HTML', reply_markup=reply_markup)
-    
-    elif query.data == 'currency':
-        await query.edit_message_text("⏳ Загрузка...", parse_mode='HTML')
-        
-        rates = get_currency_rates()
-        
-        if not rates:
-            await query.edit_message_text("❌ Ошибка", parse_mode='HTML')
-            return
-        
-        message = "💵 <b>ВАЛЮТЫ</b>\n\n"
-        
-        currencies = {
-            'RUB': '🇷🇺 Рубль',
-            'EUR': '🇪🇺 Евро',
-            'GBP': '🇬🇧 Фунт',
-            'CNY': '🇨🇳 Юань'
-        }
-        
-        for code, name in currencies.items():
-            if code in rates:
-                message += f"<b>{name}:</b> {rates[code]:.2f}\n"
-        
-        if 'RUB' in rates:
-            message += f"\n<b>1 USD = {rates['RUB']:.2f} RUB</b>"
-        
-        keyboard = [
-            [InlineKeyboardButton("🔄 Обновить", callback_data='currency')],
-            [InlineKeyboardButton("◀️ Меню", callback_data='back')]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(message, parse_mode='HTML', reply_markup=reply_markup)
-    
-    elif query.data in ['btc', 'eth', 'usd']:
-        await query.edit_message_text(
-            f"Используйте команду /{query.data}",
-            parse_mode='HTML'
-        )
-    
-    elif query.data == 'help':
-        message = """📚 <b>КОМАНДЫ</b>
-
-/start - меню
-/crypto - криптовалюты
-/currency - валюты
-/btc - Bitcoin
-/eth - Ethereum
-/usd - USD/RUB
-
-Данные в реальном времени!"""
-        
-        keyboard = [[InlineKeyboardButton("◀️ Меню", callback_data='back')]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(message, parse_mode='HTML', reply_markup=reply_markup)
-    
-    elif query.data == 'back':
-        keyboard = [
-            [
-                InlineKeyboardButton("💰 Криптовалюты", callback_data='crypto'),
-                InlineKeyboardButton("💵 Валюты", callback_data='currency')
-            ],
-            [
-                InlineKeyboardButton("₿ Bitcoin", callback_data='btc'),
-                InlineKeyboardButton("Ξ Ethereum", callback_data='eth')
-            ],
-            [
-                InlineKeyboardButton("💵 USD/RUB", callback_data='usd'),
-                InlineKeyboardButton("❓ Помощь", callback_data='help')
-            ]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        message = "📊 <b>Главное меню</b>\n\nВыбери что показать:"
-        
-        await query.edit_message_text(message, parse_mode='HTML', reply_markup=reply_markup)
-
-
-# === ГЛАВНАЯ ФУНКЦИЯ ===
-
-def main():
-    """Запуск бота"""
-    logger.info("=" * 60)
-    logger.info("🚀 CRYPTO TRACKER BOT")
-    logger.info("=" * 60)
-    
-    try:
-        application = Application.builder().token(TOKEN).build()
-        
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CommandHandler("help", help_command))
-        application.add_handler(CommandHandler("crypto", crypto_command))
-        application.add_handler(CommandHandler("currency", currency_command))
-        application.add_handler(CommandHandler("btc", btc_command))
-        application.add_handler(CommandHandler("eth", eth_command))
-        application.add_handler(CommandHandler("usd", usd_command))
-        application.add_handler(CallbackQueryHandler(button_handler))
-        
-        logger.info("✅ Handlers registered")
-        logger.info("⏳ Starting polling...")
-        
-        application.run_polling(
-            allowed_updates=Update.ALL_TYPES,
-            drop_pending_updates=True
-        )
-        
-    except Exception as e:
-        logger.error(f"❌ Critical error: {e}")
-        exit(1)
-
-
-if __name__ == '__main__':
-    main()
-        
+            [InlineKeyboardButton("🔄 Случайный жест", callback_data='random_gesture')],
+            [InlineKeyboardButton
